@@ -19,6 +19,7 @@ let booksCol;
 let borrowsCol;
 
 const categories = ["Fiction", "Science", "History", "Kids", "Others"];
+const allowedDays = [3, 5, 7, 14];
 const isId = (value) => /^[a-f\d]{24}$/i.test(String(value));
 
 // ---------- Token check ----------
@@ -160,7 +161,99 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
   res.send({ deleted: true });
 });
 
-// BORROW ROUTES GO HERE (Part 2)
+// Borrow a book. The user comes from the token.
+app.post("/borrows", verifyToken, async (req, res) => {
+  const { bookId } = req.body;
+  const days = Number(req.body.days) || 7;
+
+  if (!isId(bookId)) {
+    return res.status(400).send({ message: "Invalid book id." });
+  }
+  if (!allowedDays.includes(days)) {
+    return res.status(400).send({ message: "Pick 3, 5, 7 or 14 days." });
+  }
+
+  const book = await booksCol.findOne({ _id: new ObjectId(bookId) });
+  if (!book) return res.status(404).send({ message: "Book not found." });
+
+  // You cannot borrow your own book.
+  if (book.addedBy.email === req.user.email) {
+    return res.status(403).send({ message: "This is your own book, you cannot borrow it." });
+  }
+
+  // No double borrow.
+  const oldBorrow = await borrowsCol.findOne({
+    bookId: String(book._id),
+    userEmail: req.user.email,
+  });
+  if (oldBorrow) {
+    return res.status(409).send({ message: "You already borrowed this book." });
+  }
+
+  // Take one copy. The filter availableCopies > 0 makes this safe
+  // even if two people click at the same time.
+  const took = await booksCol.updateOne(
+    { _id: book._id, availableCopies: { $gt: 0 } },
+    { $inc: { availableCopies: -1 } }
+  );
+  if (took.modifiedCount === 0) {
+    return res.status(400).send({ message: "Not Available. No copies left." });
+  }
+
+  const borrowDate = new Date();
+  const returnDate = new Date(borrowDate.getTime() + days * 24 * 60 * 60 * 1000);
+
+  const borrow = {
+    bookId: String(book._id),
+    bookTitle: book.title,
+    bookImage: book.image,
+    userEmail: req.user.email,
+    borrowDate: borrowDate.toISOString(),
+    returnDate: returnDate.toISOString(),
+  };
+
+  try {
+    const result = await borrowsCol.insertOne(borrow);
+    res.status(201).send({ ...borrow, _id: result.insertedId });
+  } catch (err) {
+    // Borrow record did not save, so give the copy back.
+    await booksCol.updateOne({ _id: book._id }, { $inc: { availableCopies: 1 } });
+    if (err.code === 11000) {
+      return res.status(409).send({ message: "You already borrowed this book." });
+    }
+    res.status(500).send({ message: "Could not borrow the book." });
+  }
+});
+
+// My borrows. Only the logged in user's own records.
+app.get("/borrows", verifyToken, async (req, res) => {
+  const list = await borrowsCol
+    .find({ userEmail: req.user.email })
+    .sort({ borrowDate: -1 })
+    .toArray();
+  res.send(list);
+});
+
+// Return a book. Only the person who borrowed it.
+app.delete("/borrows/:id", verifyToken, async (req, res) => {
+  if (!isId(req.params.id)) {
+    return res.status(400).send({ message: "Invalid borrow id." });
+  }
+
+  const borrow = await borrowsCol.findOne({ _id: new ObjectId(req.params.id) });
+  if (!borrow) return res.status(404).send({ message: "Borrow record not found." });
+  if (borrow.userEmail !== req.user.email) {
+    return res.status(403).send({ message: "You can only return your own borrows." });
+  }
+
+  await borrowsCol.deleteOne({ _id: borrow._id });
+  // Give the copy back.
+  await booksCol.updateOne(
+    { _id: new ObjectId(borrow.bookId) },
+    { $inc: { availableCopies: 1 } }
+  );
+  res.send({ returned: true });
+});
 
 // ---------- Start ----------
 async function start() {
@@ -168,6 +261,10 @@ async function start() {
   const db = client.db("BookNook");
   booksCol = db.collection("books");
   borrowsCol = db.collection("borrows");
+
+  // One user can have only one borrow record per book.
+  await borrowsCol.createIndex({ bookId: 1, userEmail: 1 }, { unique: true });
+
   console.log("You successfully connected to MongoDB!");
 
   app.listen(port, () => {
