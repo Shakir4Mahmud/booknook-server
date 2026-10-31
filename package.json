@@ -1,0 +1,18 @@
+{
+  "name": "first-server",
+  "version": "0.0.1",
+  "description": "",
+  "license": "ISC",
+  "author": "shakir",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "mongodb": "^7.7.0"
+  }
+}
