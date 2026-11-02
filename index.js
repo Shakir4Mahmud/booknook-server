@@ -22,9 +22,8 @@ const categories = ["Fiction", "Science", "History", "Kids", "Others"];
 const allowedDays = [3, 5, 7, 14];
 const isId = (value) => /^[a-f\d]{24}$/i.test(String(value));
 
-// ---------- Token check ----------
-// The client sends the Better Auth JWT as: Authorization: Bearer <token>
-// We verify it with the public keys published by the client app.
+// ---------- Token check ---
+
 const JWKS = createRemoteJWKSet(
   new URL(`${process.env.AUTH_URL}/api/auth/jwks`)
 );
@@ -52,7 +51,7 @@ async function verifyToken(req, res, next) {
   }
 }
 
-// ---------- Book input check ----------
+// ---------- Book input check -----
 function cleanBook(body) {
   const title = String(body.title || "").trim();
   const author = String(body.author || "").trim();
@@ -76,7 +75,7 @@ app.get("/", (req, res) => {
   res.send("BookNook server is running");
 });
 
-// All books (public). Newest first. Optional ?limit=6
+// All books (public). Newest first. 
 app.get("/books", async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 0, 100);
   let cursor = booksCol.find().sort({ createdAt: -1 });
@@ -94,7 +93,7 @@ app.get("/books/:id", async (req, res) => {
   res.send(book);
 });
 
-// Add a book. The owner comes from the token, never from the request body.
+// Add a book. The owner comes from the token.
 app.post("/books", verifyToken, async (req, res) => {
   const { data, error } = cleanBook(req.body);
   if (error) return res.status(400).send({ message: error });
@@ -125,7 +124,7 @@ app.patch("/books/:id", verifyToken, async (req, res) => {
   const { data, error } = cleanBook({ ...book, ...req.body });
   if (error) return res.status(400).send({ message: error });
 
-  // Copies that are out on loan right now must stay counted.
+
   const borrowed = book.totalCopies - book.availableCopies;
   if (data.totalCopies < borrowed) {
     return res.status(400).send({
@@ -156,7 +155,7 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
   }
 
   await booksCol.deleteOne({ _id: book._id });
-  // Remove the loans of this book too, so nobody keeps a borrow of a deleted book.
+
   await borrowsCol.deleteMany({ bookId: String(book._id) });
   res.send({ deleted: true });
 });
@@ -176,7 +175,7 @@ app.post("/borrows", verifyToken, async (req, res) => {
   const book = await booksCol.findOne({ _id: new ObjectId(bookId) });
   if (!book) return res.status(404).send({ message: "Book not found." });
 
-  // You cannot borrow your own book.
+  // cannot borrow own book.
   if (book.addedBy.email === req.user.email) {
     return res.status(403).send({ message: "This is your own book, you cannot borrow it." });
   }
@@ -190,8 +189,7 @@ app.post("/borrows", verifyToken, async (req, res) => {
     return res.status(409).send({ message: "You already borrowed this book." });
   }
 
-  // Take one copy. The filter availableCopies > 0 makes this safe
-  // even if two people click at the same time.
+  // Take one copy. 
   const took = await booksCol.updateOne(
     { _id: book._id, availableCopies: { $gt: 0 } },
     { $inc: { availableCopies: -1 } }
@@ -216,7 +214,8 @@ app.post("/borrows", verifyToken, async (req, res) => {
     const result = await borrowsCol.insertOne(borrow);
     res.status(201).send({ ...borrow, _id: result.insertedId });
   } catch (err) {
-    // Borrow record did not save, so give the copy back.
+   
+    
     await booksCol.updateOne({ _id: book._id }, { $inc: { availableCopies: 1 } });
     if (err.code === 11000) {
       return res.status(409).send({ message: "You already borrowed this book." });
@@ -247,7 +246,7 @@ app.delete("/borrows/:id", verifyToken, async (req, res) => {
   }
 
   await borrowsCol.deleteOne({ _id: borrow._id });
-  // Give the copy back.
+  // Return the copy.
   await booksCol.updateOne(
     { _id: new ObjectId(borrow.bookId) },
     { $inc: { availableCopies: 1 } }
@@ -255,14 +254,13 @@ app.delete("/borrows/:id", verifyToken, async (req, res) => {
   res.send({ returned: true });
 });
 
-// ---------- Start ----------
+// ---------- Start ------
 async function start() {
   await client.connect();
   const db = client.db("BookNook");
   booksCol = db.collection("books");
   borrowsCol = db.collection("borrows");
 
-  // One user can have only one borrow record per book.
   await borrowsCol.createIndex({ bookId: 1, userEmail: 1 }, { unique: true });
 
   console.log("You successfully connected to MongoDB!");
